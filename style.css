@@ -237,8 +237,11 @@ body.timer-running .glow-orb-2 {
 }
 
 .logo-icon {
-  font-size: 2rem;
-  filter: drop-shadow(0 0 8px var(--primary-glow));
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 12px;
+  filter: drop-shadow(0 0 12px rgba(162, 155, 254, 0.3));
+  object-fit: cover;
 }
 
 .subtitle {
