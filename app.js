@@ -5,6 +5,20 @@
 document.addEventListener('DOMContentLoaded', () => {
   
   // ==========================================
+  // ZeroSlate 연동: URL task 파라미터 확인
+  // ==========================================
+  const urlParams = new URLSearchParams(window.location.search);
+  const taskName = urlParams.get('task');
+  if (taskName) {
+    const banner = document.getElementById('task-banner');
+    const bannerText = document.getElementById('task-banner-text');
+    if (banner && bannerText) {
+      bannerText.textContent = `현재 몰입 중: ${taskName}`;
+      banner.style.display = 'inline-flex';
+    }
+  }
+
+  // ==========================================
   // 1. 상태 변수 및 요소 셀렉터
   // ==========================================
   

@@ -250,6 +250,27 @@ body.timer-running .glow-orb-2 {
   margin-top: 0.25rem;
 }
 
+.task-banner {
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  background: rgba(162, 155, 254, 0.15);
+  border: 1px solid rgba(162, 155, 254, 0.3);
+  border-radius: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--primary-glow);
+  font-weight: 600;
+  font-size: 0.9rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  animation: fadeInDown 0.4s ease-out;
+}
+
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* 반응형 2단 대시보드 */
 .dashboard-grid {
   display: grid;
