@@ -1,4 +1,10 @@
 {
+  "name": "zero-noise",
+  "private": true,
+  "scripts": {
+    "test": "node test.js",
+    "check": "node --check app.js && node --check mobile-app.js && node --check sw.js"
+  },
   "dependencies": {
     "jsdom": "^29.1.1"
   }

@@ -1,80 +1,77 @@
-const fs = require('fs');
-const jsdom = require('jsdom');
-const { JSDOM } = jsdom;
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { JSDOM } = require('jsdom');
 
-const html = fs.readFileSync('index.html', 'utf-8');
-let js = fs.readFileSync('app.js', 'utf-8');
+const root = __dirname;
+const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+const appSource = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const mobileSource = fs.readFileSync(path.join(root, 'mobile-app.js'), 'utf8');
+const mobileCss = fs.readFileSync(path.join(root, 'mobile.css'), 'utf8');
+const serviceWorkerSource = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 
-// Inject try/catch inside startAudio
-js = js.replace('function startAudio() {', 'function startAudio() { try { console.log("startAudio called");');
-js = js.replace(/btnAudioToggle\.classList\.add\('active'\);\s*\}/, 'btnAudioToggle.classList.add(\'active\'); } catch(e) { console.error("Error in startAudio:", e); } }');
+const dom = new JSDOM(html, {
+  runScripts: 'outside-only',
+  url: 'https://noise.zeroslate.kr/?view=focus'
+});
+const { window } = dom;
+const runtimeErrors = [];
 
-const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'http://localhost' });
-const window = dom.window;
-
-// Mock AudioContext
-window.AudioContext = class {
-  constructor() {
-    this.state = 'suspended';
-    this.currentTime = 0;
-    this.destination = {};
-  }
-  createGain() {
-    return { gain: { setValueAtTime: () => {}, linearRampToValueAtTime: () => {} }, connect: () => {} };
-  }
-  createBufferSource() {
-    return { connect: () => {}, start: () => {}, stop: () => {}, disconnect: () => {} };
-  }
-  createChannelMerger() {
-    return { connect: () => {} };
-  }
-  createOscillator() {
-    return { connect: () => {}, start: () => {}, stop: () => {}, disconnect: () => {}, frequency: { value: 0 }, type: 'sine' };
-  }
-  resume() {}
+window.addEventListener('error', (event) => runtimeErrors.push(event.error || event.message));
+window.matchMedia = (query) => ({
+  matches: query.includes('max-width'),
+  media: query,
+  addEventListener() {},
+  removeEventListener() {}
+});
+window.scrollTo = () => {};
+window.URL.createObjectURL = () => 'blob:zeronoise-timer';
+window.Worker = class {
+  postMessage() {}
+  terminate() {}
 };
-window.webkitAudioContext = window.AudioContext;
-
-// Mock Audio
 window.Audio = class {
-  constructor() {
-    this.volume = 1;
-    this.loop = false;
-  }
   play() { return Promise.resolve(); }
   pause() {}
 };
+window.confirm = () => true;
+window.alert = () => {};
 
-// Mock localStorage
-window.localStorage = {
-  getItem: () => null,
-  setItem: () => {},
-  removeItem: () => {}
-};
+window.eval(appSource);
+window.eval(mobileSource);
+window.document.dispatchEvent(new window.Event('DOMContentLoaded', { bubbles: true }));
 
-// Mock Worker
-window.Worker = class {
-  constructor() {}
-  postMessage() {}
-  addEventListener() {}
-};
-window.URL.createObjectURL = () => 'mock-url';
+assert.equal(runtimeErrors.length, 0, `Runtime errors: ${runtimeErrors.join(', ')}`);
+assert.equal(window.document.body.dataset.mobileView, 'focus');
 
-try {
-  dom.window.eval(js);
-  console.log('JS loaded successfully');
+const soundTab = window.document.querySelector('[data-mobile-view="sound"]');
+soundTab.click();
+assert.equal(window.document.body.dataset.mobileView, 'sound');
+assert.equal(window.document.querySelector('.sound-card').classList.contains('collapsed'), false);
+assert.equal(soundTab.getAttribute('aria-current'), 'page');
 
-  // Trigger DOMContentLoaded
-  const event = window.document.createEvent('Event');
-  event.initEvent('DOMContentLoaded', true, true);
-  window.document.dispatchEvent(event);
-  
-  const btnAudioToggle = window.document.getElementById('btn-audio-toggle');
-  if (btnAudioToggle) {
-    btnAudioToggle.click();
-    console.log('Button classes:', btnAudioToggle.className);
-  }
+const editor = window.document.getElementById('zen-editor');
+editor.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+assert.equal(window.document.body.classList.contains('editor-keyboard-active'), true);
+editor.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+assert.equal(window.document.body.classList.contains('editor-keyboard-active'), false);
 
-} catch(e) {
-  console.error('Fatal Error:', e);
-}
+assert.match(html, /viewport-fit=cover/);
+assert.match(html, /id="mobile-app-nav"/);
+assert.match(mobileCss, /env\(safe-area-inset-bottom/);
+assert.match(mobileCss, /100svh/);
+assert.match(serviceWorkerSource, /CACHE_AUDIO/);
+assert.match(serviceWorkerSource, /mobile-app\.js/);
+
+assert.equal(manifest.display, 'standalone');
+assert.equal(manifest.scope, './');
+assert.ok(manifest.shortcuts.some((shortcut) => shortcut.url.includes('view=write')));
+assert.ok(manifest.icons.some((icon) => icon.purpose === 'maskable'));
+
+manifest.icons.forEach((icon) => {
+  assert.equal(icon.src.startsWith('data:'), false);
+  assert.equal(fs.existsSync(path.join(root, icon.src)), true, `Missing icon: ${icon.src}`);
+});
+
+console.log('ZeroNoise mobile/PWA smoke test passed.');

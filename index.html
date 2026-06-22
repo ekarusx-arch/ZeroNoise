@@ -2,9 +2,17 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>ZeroNoise</title>
+  <meta name="description" content="타이머, 사운드스케이프, 젠 라이터를 한곳에서 사용하는 몰입 도구">
+  <meta name="application-name" content="ZeroNoise">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="ZeroNoise">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
   <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   
   <!-- 프리미엄 폰트 불러오기 -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,7 +20,8 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
   
   <!-- CSS 스타일 시트 연결 -->
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20260622b">
+  <link rel="stylesheet" href="mobile.css?v=20260622b">
 
   <!-- PWA Manifest 연결 -->
   <link rel="manifest" href="manifest.json">
@@ -37,6 +46,10 @@
         <h1>ZeroNoise</h1>
       </div>
       <p class="subtitle">소음과 생각을 지우는 몰입의 방</p>
+      <button id="pwa-install-button" class="pwa-install-button" type="button" hidden>
+        <span aria-hidden="true">↓</span>
+        <span>앱 설치</span>
+      </button>
       <div id="task-banner" class="task-banner" style="display: none;">
         <span class="task-banner-icon">🎯</span>
         <span class="task-banner-text" id="task-banner-text">현재 몰입 중</span>
@@ -411,6 +424,39 @@
     </div> <!-- end of stats-page -->
   </div> <!-- end of app-slider -->
 
+  <nav id="mobile-app-nav" class="mobile-app-nav" aria-label="모바일 주요 메뉴">
+    <button class="mobile-nav-item active" type="button" data-mobile-view="focus" aria-label="타이머" aria-current="page">
+      <span class="mobile-nav-icon" aria-hidden="true">◴</span>
+      <span>타이머</span>
+    </button>
+    <button class="mobile-nav-item" type="button" data-mobile-view="sound" aria-label="사운드">
+      <span class="mobile-nav-icon" aria-hidden="true">≋</span>
+      <span>사운드</span>
+    </button>
+    <button class="mobile-nav-item" type="button" data-mobile-view="write" aria-label="글쓰기">
+      <span class="mobile-nav-icon" aria-hidden="true">✎</span>
+      <span>글쓰기</span>
+    </button>
+    <button class="mobile-nav-item" type="button" data-mobile-view="stats" aria-label="성과">
+      <span class="mobile-nav-icon" aria-hidden="true">▦</span>
+      <span>성과</span>
+    </button>
+  </nav>
+
+  <div id="offline-indicator" class="offline-indicator" role="status" hidden>
+    오프라인 모드
+  </div>
+
+  <div id="pwa-install-guide" class="pwa-install-guide" hidden>
+    <section class="pwa-install-sheet" role="dialog" aria-modal="true" aria-labelledby="pwa-install-title">
+      <div class="pwa-install-sheet-header">
+        <h2 id="pwa-install-title">ZeroNoise 설치</h2>
+        <button id="pwa-install-guide-close" class="pwa-install-guide-close" type="button" aria-label="설치 안내 닫기">×</button>
+      </div>
+      <p>Safari 공유 메뉴에서 <strong>홈 화면에 추가</strong>를 선택하세요.</p>
+    </section>
+  </div>
+
     <!-- 보관함 모달 -->
     <div id="library-modal" class="modal-overlay hidden">
       <div class="modal-content glass-card">
@@ -443,6 +489,7 @@
 
   <!-- html2canvas 라이브러리 (이미지 저장용) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=20260622b"></script>
+  <script src="mobile-app.js?v=20260622b"></script>
 </body>
 </html>

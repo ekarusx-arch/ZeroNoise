@@ -9,6 +9,168 @@ document.addEventListener('DOMContentLoaded', () => {
   // ==========================================
   const urlParams = new URLSearchParams(window.location.search);
   const taskName = urlParams.get('task');
+  const sessionId = urlParams.get('session');
+  const hasSuiteContext = urlParams.has('from') || urlParams.has('returnUrl') || urlParams.has('return') || Boolean(taskName || sessionId);
+  const suiteSource = urlParams.get('from') || (hasSuiteContext ? 'zeroslate' : 'standalone');
+  const suiteDate = urlParams.get('date');
+  const requestedMinutes = Number.parseInt(urlParams.get('minutes') || urlParams.get('duration') || '', 10);
+  const returnUrl = normalizeSuiteReturnUrl(urlParams.get('returnUrl') || urlParams.get('return'));
+  const FOCUS_QUEUE_KEY = 'zeronoise_pending_focus_sessions';
+  const suiteStartedAt = new Date().toISOString();
+  let suiteClientEventId = createSuiteClientEventId();
+
+  function normalizeSuiteReturnUrl(rawUrl) {
+    if (!rawUrl) return 'https://zeroslate.kr';
+
+    try {
+      const parsed = new URL(rawUrl, window.location.origin);
+      const isAllowedProtocol = parsed.protocol === 'https:' || parsed.protocol === 'http:';
+      const isAllowedHost = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname.endsWith('zeroslate.kr');
+
+      if (isAllowedProtocol && isAllowedHost) {
+        return parsed.toString();
+      }
+    } catch (error) {
+      console.warn('ZeroSlate return URL parsing failed:', error);
+    }
+
+    return 'https://zeroslate.kr';
+  }
+
+  function createSuiteClientEventId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return `zn_${window.crypto.randomUUID()}`;
+    }
+
+    return `zn_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function buildSuiteReturnUrl(status, actualMinutes, saveStatus, eventId) {
+    const target = new URL(returnUrl);
+    target.searchParams.set('from', 'noise');
+    target.searchParams.set('noiseStatus', status);
+
+    if (sessionId) target.searchParams.set('noiseSession', sessionId);
+    if (taskName) target.searchParams.set('task', taskName);
+    if (eventId) target.searchParams.set('noiseEvent', eventId);
+    if (saveStatus) target.searchParams.set('noiseSaved', saveStatus);
+    if (Number.isFinite(actualMinutes) && actualMinutes > 0) {
+      target.searchParams.set('actualMinutes', String(actualMinutes));
+    }
+
+    return target.toString();
+  }
+
+  function mountSuiteBridge() {
+    const bridge = document.createElement('a');
+    bridge.id = 'suite-return-link';
+    bridge.className = 'suite-return-link';
+    bridge.href = hasSuiteContext ? buildSuiteReturnUrl('returned') : returnUrl;
+    bridge.textContent = '← ZeroSlate로 돌아가기';
+    bridge.setAttribute('aria-label', 'ZeroSlate로 돌아가기');
+
+    document.body.appendChild(bridge);
+  }
+
+  function markSuiteFocusCompleted(actualMinutes, saveStatus, eventId) {
+    const bridge = document.getElementById('suite-return-link');
+    if (!bridge) return;
+
+    bridge.href = buildSuiteReturnUrl('completed', actualMinutes, saveStatus, eventId);
+    bridge.textContent = saveStatus === 'saved' ? '저장 완료 · ZeroSlate로' : '완료 기록하고 ZeroSlate로';
+    bridge.classList.add('is-completed');
+  }
+
+  function getFocusSessionsApiUrl() {
+    return new URL('/api/focus-sessions', returnUrl).toString();
+  }
+
+  function getPendingFocusSessions() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(FOCUS_QUEUE_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function setPendingFocusSessions(items) {
+    localStorage.setItem(FOCUS_QUEUE_KEY, JSON.stringify(items.slice(-20)));
+  }
+
+  function enqueueFocusSession(payload) {
+    const pending = getPendingFocusSessions();
+    if (!pending.some((item) => item.clientEventId === payload.clientEventId)) {
+      pending.push(payload);
+      setPendingFocusSessions(pending);
+    }
+  }
+
+  async function sendFocusSession(payload) {
+    const response = await fetch(getFocusSessionsApiUrl(), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `focus_session_${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  async function flushPendingFocusSessions() {
+    const pending = getPendingFocusSessions();
+    if (pending.length === 0) return;
+
+    const failed = [];
+    for (const payload of pending) {
+      try {
+        await sendFocusSession(payload);
+      } catch {
+        failed.push(payload);
+      }
+    }
+    setPendingFocusSessions(failed);
+  }
+
+  async function persistSuiteFocusSession(actualMinutes, eventId) {
+    if (!hasSuiteContext) return 'skipped';
+
+    const plannedMinutes = Math.round(focusDuration / 60);
+    const noteCharacters = zenEditor ? zenEditor.textContent.replace(/\s/g, '').length : 0;
+    const payload = {
+      clientEventId: eventId,
+      source: 'zeronoise',
+      sourceSessionId: sessionId,
+      task: taskName,
+      date: suiteDate,
+      plannedMinutes,
+      actualMinutes,
+      noteCharacters,
+      startedAt: suiteStartedAt,
+      completedAt: new Date().toISOString(),
+      metadata: {
+        suiteSource,
+        requestedMinutes: Number.isFinite(requestedMinutes) ? requestedMinutes : null,
+        theme: document.body.className || null
+      }
+    };
+
+    try {
+      await flushPendingFocusSessions();
+      await sendFocusSession(payload);
+      return 'saved';
+    } catch (error) {
+      console.warn('ZeroSlate focus session sync pending:', error);
+      enqueueFocusSession(payload);
+      return 'pending';
+    }
+  }
+
   if (taskName) {
     const banner = document.getElementById('task-banner');
     const bannerText = document.getElementById('task-banner-text');
@@ -100,6 +262,22 @@ document.addEventListener('DOMContentLoaded', () => {
   let totalDuration = focusDuration;
   let isTimerRunning = false;
   let currentMode = 'focus'; // 'focus' 또는 'break'
+
+  if (Number.isFinite(requestedMinutes) && requestedMinutes > 0) {
+    const clampedMinutes = Math.min(60, Math.max(5, requestedMinutes));
+    focusDuration = clampedMinutes * 60;
+    timeLeft = focusDuration;
+    totalDuration = focusDuration;
+    if (inputFocusTime) inputFocusTime.value = String(clampedMinutes);
+    if (valFocusTime) valFocusTime.textContent = String(clampedMinutes);
+  }
+
+  mountSuiteBridge();
+  if (hasSuiteContext) {
+    flushPendingFocusSessions().catch((error) => {
+      console.warn('ZeroSlate pending focus session retry failed:', error);
+    });
+  }
 
   // 노트 보관함 상태
   let notes = [];
@@ -365,6 +543,14 @@ document.addEventListener('DOMContentLoaded', () => {
       stats.sessions += 1;
       const focusedMinutes = Math.round(focusDuration / 60);
       stats.minutes += focusedMinutes;
+      if (hasSuiteContext) {
+        const completedEventId = suiteClientEventId;
+        suiteClientEventId = createSuiteClientEventId();
+        markSuiteFocusCompleted(focusedMinutes, 'pending', completedEventId);
+        persistSuiteFocusSession(focusedMinutes, completedEventId).then((saveStatus) => {
+          markSuiteFocusCompleted(focusedMinutes, saveStatus, completedEventId);
+        });
+      }
       
       // 작성 중인 글자수도 최종 반영
       const currentCharCount = zenEditor.textContent.replace(/\s/g, '').length;
@@ -1561,14 +1747,6 @@ document.addEventListener('DOMContentLoaded', () => {
   updateTimerDisplay();
   loadEditorContent();
 
-  // PWA 서비스 워커 등록
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js')
-        .then((reg) => console.log('ZeroNoise 서비스 워커 등록 성공:', reg.scope))
-        .catch((err) => console.error('ZeroNoise 서비스 워커 등록 실패:', err));
-    });
-  }
 });
 
 // ==========================================
