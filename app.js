@@ -810,7 +810,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function stopAudio() {
+  function stopAudio(options = {}) {
     if (noiseNode) {
       try { noiseNode.stop(); } catch(e) {}
       noiseNode.disconnect();
@@ -818,13 +818,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     isPlayingAudio = false;
 
-    stopRain();
-    stopWindLFO();
-    stopOceanLFO();
-    stopFireplace();
-    stopHugeWave();
-    stopNightField();
-    stopQuietRoom();
+    if (options.immediate) {
+      // Preset changes must restart inside the same mobile user gesture.
+      Object.values(audioFiles).forEach((audio) => {
+        audio.fadeGeneration = (audio.fadeGeneration || 0) + 1;
+        if (audio.fadeInterval) clearInterval(audio.fadeInterval);
+        audio.fadeInterval = null;
+        audio.volume = 0;
+        audio.pause();
+      });
+    } else {
+      stopRain();
+      stopWindLFO();
+      stopOceanLFO();
+      stopFireplace();
+      stopHugeWave();
+      stopNightField();
+      stopQuietRoom();
+    }
     stopBinauralBeats();
 
     btnAudioToggle.innerHTML = '<span class="play-icon">▶</span> 재생';
@@ -886,18 +897,25 @@ document.addEventListener('DOMContentLoaded', () => {
   // 페이드 인 함수
   function fadeAudioIn(audio, maxVol) {
     if (audio.fadeInterval) clearInterval(audio.fadeInterval);
+    const generation = (audio.fadeGeneration || 0) + 1;
+    audio.fadeGeneration = generation;
+    audio.fadeInterval = null;
     audio.volume = 0;
     const beginFade = () => {
+      if (audio.fadeGeneration !== generation) return;
+
       let vol = 0;
-      audio.fadeInterval = setInterval(() => {
+      const interval = setInterval(() => {
         vol += 0.05;
         if (vol >= maxVol) {
           audio.volume = maxVol;
-          clearInterval(audio.fadeInterval);
+          clearInterval(interval);
+          if (audio.fadeInterval === interval) audio.fadeInterval = null;
         } else {
           audio.volume = vol;
         }
       }, 50);
+      audio.fadeInterval = interval;
     };
 
     const playback = audio.play();
@@ -907,6 +925,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     playback.then(beginFade).catch((error) => {
+      if (audio.fadeGeneration !== generation) return;
+
       console.warn('Natural audio playback failed:', error);
       audio.volume = 0;
       isPlayingAudio = false;
@@ -918,17 +938,21 @@ document.addEventListener('DOMContentLoaded', () => {
   // 페이드 아웃 함수
   function fadeAudioOut(audio) {
     if (audio.fadeInterval) clearInterval(audio.fadeInterval);
+    const generation = (audio.fadeGeneration || 0) + 1;
+    audio.fadeGeneration = generation;
     let vol = audio.volume;
-    audio.fadeInterval = setInterval(() => {
+    const interval = setInterval(() => {
       vol -= 0.05;
       if (vol <= 0) {
         audio.volume = 0;
         audio.pause();
-        clearInterval(audio.fadeInterval);
+        clearInterval(interval);
+        if (audio.fadeInterval === interval) audio.fadeInterval = null;
       } else {
         audio.volume = vol;
       }
     }, 50);
+    audio.fadeInterval = interval;
   }
 
   // 볼륨 동기화 헬퍼 함수
@@ -1606,12 +1630,9 @@ document.addEventListener('DOMContentLoaded', () => {
     handleNoiseTypeChange();
     
     if (isPlayingAudio) {
-      // 실시간 재생중이라면 껐다 켜서 모든 효과를 동기화
-      stopAudio();
-      setTimeout(startAudio, 50);
-    } else {
-      startAudio();
+      stopAudio({ immediate: true });
     }
+    startAudio();
   }
 
   document.querySelectorAll('.preset-btn').forEach(btn => {

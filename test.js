@@ -105,6 +105,15 @@ assert.ok(rainPlayIndex < contextIndex, 'Natural audio playback must start befor
 assert.match(appSource, /rain: 16/);
 assert.match(appSource, /createDynamicsCompressor/);
 
+const stormyNightButton = window.document.querySelector('[data-preset="stormyNight"]');
+const playsBeforeStormyNight = audioEvents.filter((event) => event.startsWith('play:')).length;
+stormyNightButton.click();
+const playsAfterStormyNight = audioEvents.filter((event) => event.startsWith('play:')).length;
+assert.ok(
+  playsAfterStormyNight > playsBeforeStormyNight,
+  'Stormy Night must restart natural audio synchronously inside the preset click.'
+);
+
 assert.match(html, /viewport-fit=cover/);
 assert.match(html, /id="mobile-app-nav"/);
 assert.match(mobileCss, /env\(safe-area-inset-bottom/);
