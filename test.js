@@ -37,7 +37,10 @@ window.Audio = class {
   constructor(src) { this.src = src; this.volume = 1; this.paused = true; }
   load() {}
   play() { return Promise.resolve(); }
-  pause() { this.paused = true; }
+  pause() {
+    this.paused = true;
+    audioEvents.push(`pause:${this.src}`);
+  }
 };
 window.Audio.prototype.play = function play() {
   this.paused = false;
@@ -112,6 +115,20 @@ const playsAfterStormyNight = audioEvents.filter((event) => event.startsWith('pl
 assert.ok(
   playsAfterStormyNight > playsBeforeStormyNight,
   'Stormy Night must restart natural audio synchronously inside the preset click.'
+);
+
+const pausesBeforeRepeatedStormyNight = audioEvents.filter((event) => event.startsWith('pause:')).length;
+const playsBeforeRepeatedStormyNight = audioEvents.filter((event) => event.startsWith('play:')).length;
+stormyNightButton.click();
+assert.equal(
+  audioEvents.filter((event) => event.startsWith('pause:')).length,
+  pausesBeforeRepeatedStormyNight,
+  'Selecting the active Stormy Night preset again must not pause its audio.'
+);
+assert.equal(
+  audioEvents.filter((event) => event.startsWith('play:')).length,
+  playsBeforeRepeatedStormyNight,
+  'Selecting the active Stormy Night preset again must not restart its audio.'
 );
 
 assert.match(html, /viewport-fit=cover/);

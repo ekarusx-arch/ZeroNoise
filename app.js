@@ -1599,6 +1599,33 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  function presetConfigMatches(config) {
+    const selectedNoise = document.querySelector('input[name="noise-type"]:checked')?.value;
+    const selectedBinaural = document.querySelector('input[name="binaural-type"]:checked')?.value;
+    const matchesValue = (element, value, fallback) => (
+      parseFloat(element?.value) === parseFloat(value !== undefined ? value : fallback)
+    );
+
+    return selectedNoise === (config.noiseType || 'none')
+      && selectedBinaural === (config.binauralType || 'none')
+      && matchesValue(sliderNoise, config.noiseVol, 0.2)
+      && matchesValue(sliderBinaural, config.binauralVol, 0.2)
+      && checkboxRainFilter.checked === !!config.rain
+      && matchesValue(sliderRain, config.rainVol, 1.0)
+      && checkboxWindFilter.checked === !!config.wind
+      && matchesValue(sliderWind, config.windVol, 1.0)
+      && checkboxOceanFilter.checked === !!config.ocean
+      && matchesValue(sliderOcean, config.oceanVol, 1.0)
+      && checkboxHugeWaveFilter.checked === !!config.hugeWave
+      && matchesValue(sliderHugeWave, config.hugeWaveVol, 1.0)
+      && checkboxNightFieldFilter.checked === !!config.nightField
+      && matchesValue(sliderNightField, config.nightFieldVol, 1.0)
+      && checkboxFireFilter.checked === !!config.fire
+      && matchesValue(sliderFire, config.fireVol, 1.0)
+      && checkboxQuietRoomFilter.checked === !!config.quietRoom
+      && matchesValue(sliderQuietRoom, config.quietRoomVol, 1.0);
+  }
+
   function applyPresetConfig(config) {
     document.querySelector(`input[name="noise-type"][value="${config.noiseType || 'none'}"]`).checked = true;
     document.querySelector(`input[name="binaural-type"][value="${config.binauralType || 'none'}"]`).checked = true;
@@ -1639,6 +1666,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', (e) => {
       const preset = e.target.dataset.preset;
       if (builtInPresets[preset]) {
+        if (isPlayingAudio && presetConfigMatches(builtInPresets[preset])) return;
         applyPresetConfig(builtInPresets[preset]);
       }
     });
