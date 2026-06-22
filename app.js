@@ -648,8 +648,16 @@ document.addEventListener('DOMContentLoaded', () => {
     return buffer;
   }
 
-  let nightFieldSource = null;
-  let nightFieldBoostGain = null;
+  const naturalAudioBoosts = {
+    rain: 16,
+    wind: 8,
+    ocean: 2,
+    hugeWave: 1.4,
+    nightField: 6,
+    fire: 10,
+    quietRoom: 16
+  };
+  let naturalAudioRoutes = [];
 
   function initAudio() {
     if (audioCtx) return;
@@ -663,16 +671,27 @@ document.addEventListener('DOMContentLoaded', () => {
     gainNode.gain.setValueAtTime(parseFloat(sliderVolume.value) * parseFloat(sliderNoise.value) * 0.2, audioCtx.currentTime);
     gainNode.connect(audioCtx.destination);
 
-    // 밤들판 소리 증폭 (원본 소리가 너무 작아서 GainNode로 6배 증폭)
-    try {
-      nightFieldSource = audioCtx.createMediaElementSource(audioFiles.nightField);
-      nightFieldBoostGain = audioCtx.createGain();
-      nightFieldBoostGain.gain.value = 6.0; // 6배 증폭
-      nightFieldSource.connect(nightFieldBoostGain);
-      nightFieldBoostGain.connect(audioCtx.destination);
-    } catch(err) {
-      console.warn("nightField 증폭 라우팅 실패:", err);
-    }
+    // Normalize uneven source levels without re-encoding the ambient files.
+    naturalAudioRoutes = Object.entries(audioFiles).map(([name, audio]) => {
+      try {
+        const source = audioCtx.createMediaElementSource(audio);
+        const boost = audioCtx.createGain();
+        const compressor = audioCtx.createDynamicsCompressor();
+        boost.gain.value = naturalAudioBoosts[name] || 1;
+        compressor.threshold.value = -18;
+        compressor.knee.value = 12;
+        compressor.ratio.value = 12;
+        compressor.attack.value = 0.003;
+        compressor.release.value = 0.25;
+        source.connect(boost);
+        boost.connect(compressor);
+        compressor.connect(audioCtx.destination);
+        return { source, boost, compressor };
+      } catch (error) {
+        console.warn(`Natural audio routing failed: ${name}`, error);
+        return null;
+      }
+    }).filter(Boolean);
   }
 
   // ==========================================
@@ -727,8 +746,26 @@ document.addEventListener('DOMContentLoaded', () => {
     binauralOscRight.start();
   }
 
+  function startSelectedNaturalSounds() {
+    const naturalSounds = [
+      [checkboxRainFilter, startRain],
+      [checkboxWindFilter, startWindLFO],
+      [checkboxOceanFilter, startOceanLFO],
+      [checkboxHugeWaveFilter, startHugeWave],
+      [checkboxNightFieldFilter, startNightField],
+      [checkboxFireFilter, startFireplace],
+      [checkboxQuietRoomFilter, startQuietRoom]
+    ];
+
+    naturalSounds.forEach(([checkbox, start]) => {
+      if (checkbox?.checked) start();
+    });
+  }
+
   function startAudio() {
     try {
+      // Keep media.play() inside the original user gesture on mobile browsers.
+      startSelectedNaturalSounds();
       initAudio();
       if (audioCtx.state === 'suspended') {
         audioCtx.resume();
@@ -756,14 +793,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       isPlayingAudio = true;
       
-      if (checkboxRainFilter && checkboxRainFilter.checked) startRain();
-      if (checkboxWindFilter && checkboxWindFilter.checked) startWindLFO();
-      if (checkboxOceanFilter && checkboxOceanFilter.checked) startOceanLFO();
-      if (checkboxHugeWaveFilter && checkboxHugeWaveFilter.checked) startHugeWave();
-      if (checkboxNightFieldFilter && checkboxNightFieldFilter.checked) startNightField();
-      if (checkboxFireFilter && checkboxFireFilter.checked) startFireplace();
-      if (checkboxQuietRoomFilter && checkboxQuietRoomFilter.checked) startQuietRoom();
-
       startBinauralBeats();
 
       if (btnAudioToggle) {
@@ -818,23 +847,72 @@ document.addEventListener('DOMContentLoaded', () => {
   // 루프 설정
   [audioFiles.rain, audioFiles.wind, audioFiles.ocean, audioFiles.hugeWave, audioFiles.nightField, audioFiles.fire, audioFiles.quietRoom].forEach(audio => {
     audio.loop = true;
+    audio.preload = 'auto';
+    audio.playsInline = true;
   });
+
+  const naturalAudioControls = [
+    [checkboxRainFilter, audioFiles.rain],
+    [checkboxWindFilter, audioFiles.wind],
+    [checkboxOceanFilter, audioFiles.ocean],
+    [checkboxHugeWaveFilter, audioFiles.hugeWave],
+    [checkboxNightFieldFilter, audioFiles.nightField],
+    [checkboxFireFilter, audioFiles.fire],
+    [checkboxQuietRoomFilter, audioFiles.quietRoom]
+  ];
+
+  function primeNaturalAudio(audio) {
+    if (!audio || !audio.paused) return;
+
+    audio.volume = 0;
+    const playback = audio.play();
+    playback?.catch(() => {
+      // The click handler retries and exposes a visible retry state if needed.
+    });
+  }
+
+  naturalAudioControls.forEach(([checkbox, audio]) => {
+    checkbox?.closest('.toggle-switch')?.addEventListener('pointerdown', () => {
+      primeNaturalAudio(audio);
+    }, { passive: true });
+  });
+
+  btnAudioToggle?.addEventListener('pointerdown', () => {
+    naturalAudioControls.forEach(([checkbox, audio]) => {
+      if (checkbox?.checked) primeNaturalAudio(audio);
+    });
+  }, { passive: true });
 
   // 페이드 인 함수
   function fadeAudioIn(audio, maxVol) {
     if (audio.fadeInterval) clearInterval(audio.fadeInterval);
     audio.volume = 0;
-    audio.play().catch(e => console.log('오디오 재생 실패:', e));
-    let vol = 0;
-    audio.fadeInterval = setInterval(() => {
-      vol += 0.05;
-      if (vol >= maxVol) {
-        audio.volume = maxVol;
-        clearInterval(audio.fadeInterval);
-      } else {
-        audio.volume = vol;
-      }
-    }, 50);
+    const beginFade = () => {
+      let vol = 0;
+      audio.fadeInterval = setInterval(() => {
+        vol += 0.05;
+        if (vol >= maxVol) {
+          audio.volume = maxVol;
+          clearInterval(audio.fadeInterval);
+        } else {
+          audio.volume = vol;
+        }
+      }, 50);
+    };
+
+    const playback = audio.play();
+    if (!playback || typeof playback.then !== 'function') {
+      beginFade();
+      return;
+    }
+
+    playback.then(beginFade).catch((error) => {
+      console.warn('Natural audio playback failed:', error);
+      audio.volume = 0;
+      isPlayingAudio = false;
+      btnAudioToggle.innerHTML = '<span class="play-icon">▶</span> 다시 재생';
+      btnAudioToggle.classList.remove('active');
+    });
   }
 
   // 페이드 아웃 함수

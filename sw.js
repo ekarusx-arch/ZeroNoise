@@ -1,14 +1,14 @@
-const CACHE_VERSION = 'zeronoise-v10';
+const CACHE_VERSION = 'zeronoise-v13';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const AUDIO_CACHE = `${CACHE_VERSION}-audio`;
 
 const SHELL_ASSETS = [
   './',
   './index.html',
-  './app.js?v=20260622b',
-  './mobile-app.js?v=20260622b',
-  './style.css?v=20260622b',
-  './mobile.css?v=20260622b',
+  './app.js?v=20260622e',
+  './mobile-app.js?v=20260622e',
+  './style.css?v=20260622e',
+  './mobile.css?v=20260622e',
   './manifest.json',
   './logo.png',
   './favicon.png',
@@ -58,6 +58,42 @@ async function cacheFirst(request) {
   return response;
 }
 
+async function serveAudio(request) {
+  const rangeHeader = request.headers.get('range');
+  if (!rangeHeader) return cacheFirst(request);
+
+  const cache = await caches.open(AUDIO_CACHE);
+  const cached = await cache.match(request.url);
+  if (!cached) return fetch(request);
+
+  const buffer = await cached.arrayBuffer();
+  const size = buffer.byteLength;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
+  if (!match) return fetch(request);
+
+  const suffixLength = match[1] ? null : Number(match[2]);
+  const start = match[1] ? Number(match[1]) : Math.max(size - suffixLength, 0);
+  const end = match[2] && match[1] ? Math.min(Number(match[2]), size - 1) : size - 1;
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) {
+    return new Response(null, {
+      status: 416,
+      headers: { 'Content-Range': `bytes */${size}` }
+    });
+  }
+
+  const headers = new Headers(cached.headers);
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
+  headers.set('Content-Length', String(end - start + 1));
+
+  return new Response(buffer.slice(start, end + 1), {
+    status: 206,
+    statusText: 'Partial Content',
+    headers
+  });
+}
+
 async function staleWhileRevalidate(request) {
   const cache = await caches.open(STATIC_CACHE);
   const cached = await cache.match(request);
@@ -95,7 +131,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (decodeURIComponent(url.pathname).includes('/기본사운드/')) {
-    event.respondWith(cacheFirst(event.request));
+    event.respondWith(serveAudio(event.request));
     return;
   }
 

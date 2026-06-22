@@ -17,6 +17,7 @@ const dom = new JSDOM(html, {
 });
 const { window } = dom;
 const runtimeErrors = [];
+const audioEvents = [];
 
 window.addEventListener('error', (event) => runtimeErrors.push(event.error || event.message));
 window.matchMedia = (query) => ({
@@ -26,15 +27,51 @@ window.matchMedia = (query) => ({
   removeEventListener() {}
 });
 window.scrollTo = () => {};
+window.PointerEvent = window.Event;
 window.URL.createObjectURL = () => 'blob:zeronoise-timer';
 window.Worker = class {
   postMessage() {}
   terminate() {}
 };
 window.Audio = class {
+  constructor(src) { this.src = src; this.volume = 1; this.paused = true; }
+  load() {}
   play() { return Promise.resolve(); }
-  pause() {}
+  pause() { this.paused = true; }
 };
+window.Audio.prototype.play = function play() {
+  this.paused = false;
+  audioEvents.push(`play:${this.src}`);
+  return Promise.resolve();
+};
+window.AudioContext = class {
+  constructor() {
+    audioEvents.push('context');
+    this.state = 'suspended';
+    this.currentTime = 0;
+    this.destination = {};
+  }
+  createGain() {
+    return {
+      gain: { value: 1, setValueAtTime() {}, linearRampToValueAtTime() {} },
+      connect() {},
+      disconnect() {}
+    };
+  }
+  createMediaElementSource() { return { connect() {} }; }
+  createDynamicsCompressor() {
+    return {
+      threshold: { value: 0 },
+      knee: { value: 0 },
+      ratio: { value: 0 },
+      attack: { value: 0 },
+      release: { value: 0 },
+      connect() {}
+    };
+  }
+  resume() { this.state = 'running'; return Promise.resolve(); }
+};
+window.webkitAudioContext = window.AudioContext;
 window.confirm = () => true;
 window.alert = () => {};
 
@@ -57,12 +94,25 @@ assert.equal(window.document.body.classList.contains('editor-keyboard-active'), 
 editor.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
 assert.equal(window.document.body.classList.contains('editor-keyboard-active'), false);
 
+const rainCheckbox = window.document.getElementById('checkbox-rain-filter');
+rainCheckbox.closest('.toggle-switch').dispatchEvent(new window.PointerEvent('pointerdown', { bubbles: true }));
+rainCheckbox.checked = true;
+rainCheckbox.dispatchEvent(new window.Event('change', { bubbles: true }));
+const rainPlayIndex = audioEvents.findIndex((event) => event.includes('rain.mp3'));
+const contextIndex = audioEvents.indexOf('context');
+assert.ok(rainPlayIndex >= 0, 'Rain audio should attempt playback.');
+assert.ok(rainPlayIndex < contextIndex, 'Natural audio playback must start before AudioContext initialization.');
+assert.match(appSource, /rain: 16/);
+assert.match(appSource, /createDynamicsCompressor/);
+
 assert.match(html, /viewport-fit=cover/);
 assert.match(html, /id="mobile-app-nav"/);
 assert.match(mobileCss, /env\(safe-area-inset-bottom/);
 assert.match(mobileCss, /100svh/);
 assert.match(serviceWorkerSource, /CACHE_AUDIO/);
 assert.match(serviceWorkerSource, /mobile-app\.js/);
+assert.match(serviceWorkerSource, /request\.headers\.get\('range'\)/);
+assert.match(serviceWorkerSource, /status: 206/);
 
 assert.equal(manifest.display, 'standalone');
 assert.equal(manifest.scope, './');
