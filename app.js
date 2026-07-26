@@ -8,16 +8,26 @@ document.addEventListener('DOMContentLoaded', () => {
   // ZeroSlate 연동: URL task 파라미터 확인
   // ==========================================
   const urlParams = new URLSearchParams(window.location.search);
+  const suiteCode = urlParams.get('suiteCode');
   const taskName = urlParams.get('task');
   const sessionId = urlParams.get('session');
-  const hasSuiteContext = urlParams.has('from') || urlParams.has('returnUrl') || urlParams.has('return') || Boolean(taskName || sessionId);
+  const hasSuiteContext = urlParams.has('suiteCode') || urlParams.has('from') || urlParams.has('returnUrl') || urlParams.has('return') || Boolean(taskName || sessionId);
   const suiteSource = urlParams.get('from') || (hasSuiteContext ? 'zeroslate' : 'standalone');
   const suiteDate = urlParams.get('date');
   const requestedMinutes = Number.parseInt(urlParams.get('minutes') || urlParams.get('duration') || '', 10);
   const returnUrl = normalizeSuiteReturnUrl(urlParams.get('returnUrl') || urlParams.get('return'));
+  const ZEROSLATE_API_ORIGIN = 'https://zeroslate.kr';
+  const SUITE_EXCHANGE_API_URL = 'https://zeroslate.kr/api/auth/suite/exchange';
   const FOCUS_QUEUE_KEY = 'zeronoise_pending_focus_sessions';
   const suiteStartedAt = new Date().toISOString();
   let suiteClientEventId = createSuiteClientEventId();
+  let isAccountConnected = false;
+  let accountStatus = hasSuiteContext ? 'checking' : 'guest';
+  let accountUserEmail = '';
+  let accountSyncReady = false;
+  let isHydratingAccountState = false;
+  let suiteAccessToken = null;
+  let suiteExchangePromise = null;
 
   function normalizeSuiteReturnUrl(rawUrl) {
     if (!rawUrl) return 'https://zeroslate.kr';
@@ -48,6 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function buildSuiteReturnUrl(status, actualMinutes, saveStatus, eventId) {
     const target = new URL(returnUrl);
     target.searchParams.set('from', 'noise');
+    target.searchParams.set('suiteReturn', '1');
     target.searchParams.set('noiseStatus', status);
 
     if (sessionId) target.searchParams.set('noiseSession', sessionId);
@@ -65,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const bridge = document.createElement('a');
     bridge.id = 'suite-return-link';
     bridge.className = 'suite-return-link';
-    bridge.href = hasSuiteContext ? buildSuiteReturnUrl('returned') : returnUrl;
+    bridge.href = buildSuiteReturnUrl('returned');
     bridge.textContent = '← ZeroSlate로 돌아가기';
     bridge.setAttribute('aria-label', 'ZeroSlate로 돌아가기');
 
@@ -82,7 +93,62 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function getFocusSessionsApiUrl() {
-    return new URL('/api/focus-sessions', returnUrl).toString();
+    return new URL('/api/focus-sessions', ZEROSLATE_API_ORIGIN).toString();
+  }
+
+  function getNoiseStateApiUrl() {
+    return new URL('/api/zeronoise/state', ZEROSLATE_API_ORIGIN).toString();
+  }
+
+  function removeSuiteCodeFromUrl() {
+    if (!urlParams.has('suiteCode')) return;
+
+    urlParams.delete('suiteCode');
+    const nextSearch = urlParams.toString();
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+    window.history.replaceState(window.history.state, '', nextUrl);
+  }
+
+  function withSuiteAuthorization(headers) {
+    const nextHeaders = { ...(headers || {}) };
+    if (suiteAccessToken) {
+      nextHeaders.Authorization = `Bearer ${suiteAccessToken}`;
+    }
+    return nextHeaders;
+  }
+
+  async function exchangeSuiteCodeForAccessToken() {
+    if (!suiteCode) return false;
+    if (suiteAccessToken) return true;
+    if (suiteExchangePromise) return suiteExchangePromise;
+
+    suiteExchangePromise = (async () => {
+      removeSuiteCodeFromUrl();
+
+      try {
+        const response = await fetch(SUITE_EXCHANGE_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ code: suiteCode })
+        });
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok || typeof data.access_token !== 'string' || !data.access_token) {
+          console.warn('ZeroSlate suite code exchange failed:', data.error || response.status);
+          suiteAccessToken = null;
+          return false;
+        }
+
+        suiteAccessToken = data.access_token;
+        return true;
+      } catch (error) {
+        console.warn('ZeroSlate suite code exchange error:', error);
+        suiteAccessToken = null;
+        return false;
+      }
+    })();
+
+    return suiteExchangePromise;
   }
 
   function getPendingFocusSessions() {
@@ -110,7 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const response = await fetch(getFocusSessionsApiUrl(), {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: withSuiteAuthorization({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
 
@@ -138,7 +204,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function persistSuiteFocusSession(actualMinutes, eventId) {
-    if (!hasSuiteContext) return 'skipped';
+    if (!hasSuiteContext || !isAccountConnected) return 'skipped';
 
     const plannedMinutes = Math.round(focusDuration / 60);
     const noteCharacters = zenEditor ? zenEditor.textContent.replace(/\s/g, '').length : 0;
@@ -188,6 +254,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const appSlider = document.getElementById('app-slider');
   const btnGotoStats = document.getElementById('btn-goto-stats');
   const btnGotoMain = document.getElementById('btn-goto-main');
+  const accountModeBadge = document.getElementById('account-mode-badge');
+  const accountModeText = document.getElementById('account-mode-text');
+  const accountModeDetail = document.getElementById('account-mode-detail');
+  const editorAccountGate = document.getElementById('editor-account-gate');
+  const statsAccountGate = document.getElementById('stats-account-gate');
+  const accountGateLinks = document.querySelectorAll('[data-account-link]');
 
   const timerTime = document.getElementById('timer-time');
   const timerStatus = document.getElementById('timer-status');
@@ -230,6 +302,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const libraryModal = document.getElementById('library-modal');
   const btnCloseModal = document.getElementById('btn-close-modal');
   const libraryList = document.getElementById('library-list');
+  const btnZeroNoiseHelp = document.getElementById('zeronoise-help-button');
+  const zeroNoiseHelpModal = document.getElementById('zeronoise-help-modal');
+  const btnZeroNoiseHelpClose = document.getElementById('zeronoise-help-close');
   const charCountNoSpace = document.getElementById('char-count-no-space');
   const charCountWithSpace = document.getElementById('char-count-with-space');
   
@@ -248,6 +323,265 @@ document.addEventListener('DOMContentLoaded', () => {
   const inputBreakTime = document.getElementById('input-break-time');
   const valFocusTime = document.getElementById('val-focus-time');
   const valBreakTime = document.getElementById('val-break-time');
+
+  function readJsonStorage(key, fallback) {
+    try {
+      const value = localStorage.getItem(key);
+      return value ? JSON.parse(value) : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function getCleanStatsState(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const history = source.history && typeof source.history === 'object' && !Array.isArray(source.history)
+      ? source.history
+      : {};
+
+    return {
+      sessions: Number.isFinite(Number(source.sessions)) ? Math.max(0, Math.round(Number(source.sessions))) : 0,
+      minutes: Number.isFinite(Number(source.minutes)) ? Math.max(0, Math.round(Number(source.minutes))) : 0,
+      characters: Number.isFinite(Number(source.characters)) ? Math.max(0, Math.round(Number(source.characters))) : 0,
+      history: Object.fromEntries(
+        Object.entries(history)
+          .filter(([date]) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+          .map(([date, minutes]) => [date, Number.isFinite(Number(minutes)) ? Math.max(0, Math.round(Number(minutes))) : 0])
+      )
+    };
+  }
+
+  function getCleanNotesState(value) {
+    if (!Array.isArray(value)) return [];
+
+    return value
+      .filter((note) => note && typeof note === 'object')
+      .slice(-120)
+      .map((note) => ({
+        id: String(note.id || Date.now()).slice(0, 80),
+        title: String(note.title || '제목 없음').slice(0, 120),
+        content: String(note.content || '').slice(0, 120000),
+        updatedAt: Number.isFinite(Number(note.updatedAt)) ? Math.max(0, Math.round(Number(note.updatedAt))) : Date.now()
+      }));
+  }
+
+  function readLocalNoiseState() {
+    const localNotes = getCleanNotesState(readJsonStorage('zeronoise_notes', []));
+    const localStats = getCleanStatsState(readJsonStorage('zeronoise_stats', {}));
+    const localCurrentNoteId = localStorage.getItem('zeronoise_current_note_id');
+    const localPresets = readJsonStorage('zenCustomPresets', []);
+
+    return {
+      version: 1,
+      stats: localStats,
+      notes: localNotes,
+      currentNoteId: localNotes.some((note) => note.id === localCurrentNoteId) ? localCurrentNoteId : localNotes[0]?.id || null,
+      customPresets: Array.isArray(localPresets) ? localPresets.slice(-40) : [],
+      theme: localStorage.getItem('zeroNoiseTheme') || 'theme-hybrid'
+    };
+  }
+
+  function buildNoiseState() {
+    return {
+      version: 1,
+      stats,
+      notes,
+      currentNoteId,
+      customPresets: readJsonStorage('zenCustomPresets', []),
+      theme: localStorage.getItem('zeroNoiseTheme') || 'theme-hybrid'
+    };
+  }
+
+  function persistLocalNoiseState(state) {
+    const nextStats = getCleanStatsState(state?.stats);
+    const nextNotes = getCleanNotesState(state?.notes);
+    const nextCurrentNoteId = nextNotes.some((note) => note.id === state?.currentNoteId)
+      ? state.currentNoteId
+      : nextNotes[0]?.id || null;
+
+    stats = nextStats;
+    notes = nextNotes;
+    currentNoteId = nextCurrentNoteId;
+
+    localStorage.setItem('zeronoise_stats', JSON.stringify(stats));
+    localStorage.setItem('zeronoise_notes', JSON.stringify(notes));
+    if (currentNoteId) localStorage.setItem('zeronoise_current_note_id', currentNoteId);
+    else localStorage.removeItem('zeronoise_current_note_id');
+
+    if (Array.isArray(state?.customPresets)) {
+      localStorage.setItem('zenCustomPresets', JSON.stringify(state.customPresets.slice(-40)));
+      if (typeof loadCustomPresets === 'function') loadCustomPresets();
+    }
+
+    if (state?.theme && typeof applyTheme === 'function') {
+      applyTheme(String(state.theme));
+    }
+
+    updateStatsUI();
+    loadEditorContent();
+  }
+
+  async function saveNoiseStateNow() {
+    if (!isAccountConnected || !accountSyncReady || isHydratingAccountState) return;
+
+    const response = await fetch(getNoiseStateApiUrl(), {
+      method: 'PUT',
+      credentials: 'include',
+      headers: withSuiteAuthorization({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ state: buildNoiseState() })
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `noise_state_${response.status}`);
+    }
+  }
+
+  const scheduleCloudStateSync = debounce(() => {
+    saveNoiseStateNow().catch((error) => {
+      console.warn('ZeroNoise account sync failed:', error);
+    });
+  }, 900);
+
+  async function initializeAccountSync() {
+    if (!hasSuiteContext) {
+      syncAccountModeUI();
+      return;
+    }
+
+    accountStatus = 'checking';
+    syncAccountModeUI();
+
+    try {
+      await exchangeSuiteCodeForAccessToken();
+
+      const response = await fetch(getNoiseStateApiUrl(), {
+        method: 'GET',
+        credentials: 'include',
+        headers: withSuiteAuthorization({ 'Accept': 'application/json' })
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.ok) {
+        isAccountConnected = false;
+        accountStatus = data.error || (response.status === 401 ? 'unauthorized' : 'sync_error');
+        accountUserEmail = data.user?.email || '';
+        accountSyncReady = false;
+        syncAccountModeUI();
+        return;
+      }
+
+      isHydratingAccountState = true;
+      isAccountConnected = true;
+      accountStatus = 'connected';
+      accountUserEmail = data.user?.email || '';
+      accountSyncReady = false;
+
+      if (data.state) {
+        persistLocalNoiseState(data.state);
+      } else {
+        persistLocalNoiseState(readLocalNoiseState());
+      }
+
+      accountSyncReady = true;
+      isHydratingAccountState = false;
+      syncAccountModeUI();
+
+      if (!data.state) {
+        await saveNoiseStateNow();
+      }
+
+      flushPendingFocusSessions().catch((error) => {
+        console.warn('ZeroSlate pending focus session retry failed:', error);
+      });
+    } catch (error) {
+      isHydratingAccountState = false;
+      isAccountConnected = false;
+      accountStatus = 'sync_error';
+      accountSyncReady = false;
+      console.warn('ZeroNoise account sync init failed:', error);
+      syncAccountModeUI();
+    }
+  }
+
+  function formatAccountLabel(email) {
+    if (!email) return 'ZeroSlate';
+    const [name] = String(email).split('@');
+    const label = name || email;
+    return label.length > 14 ? `${label.slice(0, 13)}…` : label;
+  }
+
+  function syncAccountModeUI() {
+    document.body.classList.toggle('account-connected', isAccountConnected);
+    document.body.classList.toggle('guest-mode', !isAccountConnected);
+    document.body.classList.toggle('account-checking', accountStatus === 'checking');
+
+    accountGateLinks.forEach((link) => {
+      link.href = returnUrl;
+    });
+
+    if (accountModeBadge) accountModeBadge.classList.toggle('is-connected', isAccountConnected);
+    if (accountModeText) {
+      if (isAccountConnected) accountModeText.textContent = formatAccountLabel(accountUserEmail);
+      else if (accountStatus === 'checking') accountModeText.textContent = '계정 확인 중';
+      else if (accountStatus === 'unauthorized') accountModeText.textContent = '로그인 필요';
+      else if (accountStatus === 'pro_required') accountModeText.textContent = 'Pro 필요';
+      else if (accountStatus === 'suite_app_states_table_missing') accountModeText.textContent = '동기화 준비 필요';
+      else accountModeText.textContent = '게스트 모드';
+    }
+    if (accountModeDetail) {
+      accountModeDetail.textContent = isAccountConnected
+        ? '동기화 켜짐'
+        : accountStatus === 'checking'
+          ? 'ZeroSlate 세션 확인'
+          : accountStatus === 'unauthorized'
+            ? 'ZeroSlate 로그인 후 사용'
+            : accountStatus === 'pro_required'
+              ? 'Suite 기록은 Pro 전용'
+              : accountStatus === 'suite_app_states_table_missing'
+                ? 'Supabase SQL 실행 필요'
+                : '사운드 · 타이머 전용';
+    }
+    if (editorAccountGate) editorAccountGate.hidden = isAccountConnected;
+    if (statsAccountGate) statsAccountGate.hidden = isAccountConnected;
+
+    if (zenEditor) {
+      zenEditor.setAttribute('contenteditable', isAccountConnected ? 'true' : 'false');
+      zenEditor.setAttribute('aria-disabled', isAccountConnected ? 'false' : 'true');
+      if (!isAccountConnected) {
+        zenEditor.setAttribute('placeholder', 'ZeroSlate Suite에서 열면 글쓰기 기록을 안전하게 이어갈 수 있습니다.');
+      }
+    }
+
+    [btnZenMode, btnDailyPrompt, btnExportImage, btnDownloadTxt, btnDownloadMd, btnClearEditor, btnLibrary, btnResetStats].forEach((button) => {
+      if (!button) return;
+      button.disabled = !isAccountConnected;
+      if (!isAccountConnected) button.title = 'ZeroSlate Suite에서 열면 사용할 수 있습니다.';
+      else button.removeAttribute('title');
+    });
+  }
+
+  function showAccountGateNotice() {
+    const target = editorAccountGate && !editorAccountGate.hidden ? editorAccountGate : statsAccountGate;
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (accountStatus === 'checking') {
+      alert('ZeroSlate 계정을 확인하는 중입니다. 잠시 후 다시 시도해주세요.');
+    } else if (accountStatus === 'unauthorized') {
+      alert('ZeroSlate에 로그인한 뒤 Suite에서 다시 열어주세요.');
+    } else if (accountStatus === 'pro_required') {
+      alert('ZeroNoise 기록 동기화는 ZeroSlate Pro Suite 전용입니다.');
+    } else if (accountStatus === 'suite_app_states_table_missing') {
+      alert('ZeroNoise 계정 동기화 테이블이 아직 준비되지 않았습니다.');
+    } else {
+      alert('개인 기록 기능은 ZeroSlate Suite에서 열었을 때 사용할 수 있습니다.');
+    }
+  }
+
+  function canUsePersonalRecords() {
+    if (isAccountConnected) return true;
+    showAccountGateNotice();
+    return false;
+  }
 
   // SVG 원형 게이지 계산용
   const CIRCLE_RADIUS = 85;
@@ -273,20 +607,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   mountSuiteBridge();
-  if (hasSuiteContext) {
-    flushPendingFocusSessions().catch((error) => {
-      console.warn('ZeroSlate pending focus session retry failed:', error);
-    });
-  }
+  syncAccountModeUI();
 
   // 노트 보관함 상태
   let notes = [];
-  try {
-    notes = JSON.parse(localStorage.getItem('zeronoise_notes') || '[]');
-  } catch(e) {
-    notes = [];
-  }
-  let currentNoteId = localStorage.getItem('zeronoise_current_note_id');
+  let currentNoteId = null;
 
   // 백그라운드 작동을 위한 Blob Web Worker 생성 (로컬 file:// 환경 CORS 제약 우회)
   const workerCode = `
@@ -330,6 +655,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // 2. 로컬 스토리지 통계 관리 (Stats Core)
   // ==========================================
   function loadStats() {
+    if (!isAccountConnected) {
+      stats = { sessions: 0, minutes: 0, characters: 0, history: {} };
+      updateStatsUI();
+      return;
+    }
+
     const saved = localStorage.getItem('zeronoise_stats');
     if (saved) {
       try {
@@ -346,8 +677,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function saveStats() {
+    if (!isAccountConnected) {
+      updateStatsUI();
+      return;
+    }
+
     localStorage.setItem('zeronoise_stats', JSON.stringify(stats));
     updateStatsUI();
+    scheduleCloudStateSync();
   }
 
   function updateStatsUI() {
@@ -363,6 +700,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function recordTodayStats(minutes) {
+    if (!isAccountConnected) return;
+
     const today = getTodayString();
     if (!stats.history[today]) {
       stats.history[today] = 0;
@@ -409,6 +748,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.body.classList.add(themeValue);
     }
     localStorage.setItem('zeroNoiseTheme', themeValue);
+    scheduleCloudStateSync();
     if (themeSelector) themeSelector.value = themeValue;
   }
 
@@ -540,9 +880,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (currentMode === 'focus') {
       // 집중 세션 완료
-      stats.sessions += 1;
       const focusedMinutes = Math.round(focusDuration / 60);
-      stats.minutes += focusedMinutes;
       if (hasSuiteContext) {
         const completedEventId = suiteClientEventId;
         suiteClientEventId = createSuiteClientEventId();
@@ -551,15 +889,20 @@ document.addEventListener('DOMContentLoaded', () => {
           markSuiteFocusCompleted(focusedMinutes, saveStatus, completedEventId);
         });
       }
-      
-      // 작성 중인 글자수도 최종 반영
-      const currentCharCount = zenEditor.textContent.replace(/\s/g, '').length;
-      const addedChars = Math.max(0, currentCharCount - lastSavedCharCount);
-      stats.characters += addedChars;
-      lastSavedCharCount = currentCharCount;
-      
-      saveStats();
-      recordTodayStats(focusedMinutes); // 30일 잔디 심기 기록 업데이트
+
+      if (isAccountConnected) {
+        stats.sessions += 1;
+        stats.minutes += focusedMinutes;
+
+        // 작성 중인 글자수도 최종 반영
+        const currentCharCount = zenEditor.textContent.replace(/\s/g, '').length;
+        const addedChars = Math.max(0, currentCharCount - lastSavedCharCount);
+        stats.characters += addedChars;
+        lastSavedCharCount = currentCharCount;
+
+        saveStats();
+        recordTodayStats(focusedMinutes); // 30일 잔디 심기 기록 업데이트
+      }
       
       // 휴식 모드로 전환
       currentMode = 'break';
@@ -1157,6 +1500,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 에디터 본문 자동 저장 (디바운스 적용)
   const saveEditorContent = debounce(() => {
+    if (!isAccountConnected) return;
     if (!currentNoteId) return;
     const html = zenEditor.innerHTML;
     const title = extractTitle(html);
@@ -1170,11 +1514,19 @@ document.addEventListener('DOMContentLoaded', () => {
       notes.push({ id: currentNoteId, title, content: html, updatedAt: Date.now() });
     }
     localStorage.setItem('zeronoise_notes', JSON.stringify(notes));
+    scheduleCloudStateSync();
     if (typeof renderLibraryList === 'function') renderLibraryList();
   }, 1000);
 
   // 에디터 본문 불러오기
   function loadEditorContent() {
+    if (!isAccountConnected) {
+      zenEditor.innerHTML = '';
+      updateCharCounts();
+      lastSavedCharCount = 0;
+      return;
+    }
+
     // 마이그레이션: 기존 단일 데이터가 있고 notes가 비어있으면 전환
     const oldSaved = localStorage.getItem('zeronoise_editor_content');
     if (oldSaved && notes.length === 0) {
@@ -1213,6 +1565,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function handleEditorInput() {
+    if (!isAccountConnected) return;
+
     const text = zenEditor.textContent || '';
     const lengthNoSpace = text.replace(/\s/g, '').length;
     
@@ -1242,6 +1596,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 새 글 작성 기능 (기존 글 보존 후 새 캔버스 열기)
   function createNewNote(isInitial = false) {
+    if (!isInitial && !canUsePersonalRecords()) return;
+    if (isInitial && !isAccountConnected) {
+      zenEditor.innerHTML = '';
+      updateCharCounts();
+      lastSavedCharCount = 0;
+      return;
+    }
+
     if (!isInitial && currentNoteId) {
       saveEditorContent(); // 기존 글 강제 저장
     }
@@ -1253,6 +1615,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 빈 노트 즉시 생성
     notes.push({ id: currentNoteId, title: '새로운 빈 글', content: zenEditor.innerHTML, updatedAt: Date.now() });
     localStorage.setItem('zeronoise_notes', JSON.stringify(notes));
+    scheduleCloudStateSync();
     if (typeof renderLibraryList === 'function') renderLibraryList();
     
     updateCharCounts();
@@ -1261,12 +1624,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 에디터 비우기 기능 (새 글 작성)
   function clearEditor() {
+    if (!canUsePersonalRecords()) return;
     createNewNote(false);
     saveStats();
   }
 
   // 파일 다운로드 핵심 로직
   function downloadContent(fileExtension) {
+    if (!canUsePersonalRecords()) return;
+
     const lines = Array.from(zenEditor.querySelectorAll('div')).map(div => div.textContent);
     
     let fullText = "";
@@ -1429,6 +1795,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 에디터 관련 키 입력 시 기계식 타이핑 사운드 재생
   zenEditor.addEventListener('keydown', (e) => {
+    if (!isAccountConnected) return;
     if (checkboxTypingSound.checked && !e.ctrlKey && !e.metaKey && !e.altKey) {
       // 제어용 단독 키 입력 제외
       const ignoreKeys = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
@@ -1440,12 +1807,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 에디터 관련
   zenEditor.addEventListener('input', (e) => {
+    if (!isAccountConnected) return;
     handleEditorInput(e);
     updateActiveLine(); // 입력 후 현재 줄 재감지
   });
-  zenEditor.addEventListener('keyup', updateActiveLine);   // 방향키/엔터 이동 후 줄 재감지
-  zenEditor.addEventListener('mouseup', updateActiveLine); // 마우스 클릭으로 줄 이동 후 재감지
+  zenEditor.addEventListener('keyup', () => {
+    if (isAccountConnected) updateActiveLine();
+  });   // 방향키/엔터 이동 후 줄 재감지
+  zenEditor.addEventListener('mouseup', () => {
+    if (isAccountConnected) updateActiveLine();
+  }); // 마우스 클릭으로 줄 이동 후 재감지
   zenEditor.addEventListener('focus', () => {
+    if (!isAccountConnected) {
+      showAccountGateNotice();
+      return;
+    }
     initializeEditor();
     zenEditor.classList.add('is-focused');
     updateActiveLine();
@@ -1470,6 +1846,8 @@ document.addEventListener('DOMContentLoaded', () => {
   ];
 
   btnDailyPrompt.addEventListener('click', () => {
+    if (!canUsePersonalRecords()) return;
+
     const randomPrompt = prompts[Math.floor(Math.random() * prompts.length)];
     const div = document.createElement('div');
     div.textContent = `💡 ${randomPrompt}`;
@@ -1490,6 +1868,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 이미지로 저장 (html2canvas)
   btnExportImage.addEventListener('click', () => {
+    if (!canUsePersonalRecords()) return;
+
     const textContent = zenEditor.innerText || zenEditor.textContent;
     if (!textContent.trim()) {
       alert("이미지로 저장할 내용이 없습니다.");
@@ -1698,6 +2078,7 @@ document.addEventListener('DOMContentLoaded', () => {
               p.splice(index, 1);
               localStorage.setItem('zenCustomPresets', JSON.stringify(p));
               loadCustomPresets();
+              scheduleCloudStateSync();
               return;
             }
             applyPresetConfig(preset.config);
@@ -1744,6 +2125,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       presets.push({ name, config: currentConfig });
       localStorage.setItem('zenCustomPresets', JSON.stringify(presets));
+      scheduleCloudStateSync();
       
       loadCustomPresets();
     });
@@ -1765,6 +2147,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 성과 초기화 버튼
   btnResetStats.addEventListener('click', () => {
+    if (!canUsePersonalRecords()) return;
+
     if (confirm('오늘의 몰입 성과 기록을 모두 초기화할까요?')) {
       stats = { sessions: 0, minutes: 0, characters: 0 };
       lastSavedCharCount = 0;
@@ -1774,11 +2158,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 브라우저 닫기/새로고침 시 마지막 글자수 반영 및 저장
   window.addEventListener('beforeunload', () => {
-    saveStats();
+    if (isAccountConnected) saveStats();
   });
 
   // 보관함 모달 및 로직
   function renderLibraryList() {
+    if (!isAccountConnected) {
+      libraryList.innerHTML = '<li style="text-align:center; color:var(--text-muted); padding:2rem;">ZeroSlate Suite에서 열면 보관함을 사용할 수 있습니다.</li>';
+      return;
+    }
+
     libraryList.innerHTML = '';
     const sortedNotes = [...notes].sort((a, b) => b.updatedAt - a.updatedAt);
     
@@ -1821,17 +2210,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function switchNote(id) {
+    if (!canUsePersonalRecords()) return;
+
     if (currentNoteId) saveEditorContent(); // 현재 글 임시 저장
     currentNoteId = id;
     localStorage.setItem('zeronoise_current_note_id', currentNoteId);
+    scheduleCloudStateSync();
     loadEditorContent();
     libraryModal.classList.add('hidden');
   }
 
   function deleteNote(id) {
+    if (!canUsePersonalRecords()) return;
+
     if (!confirm('이 글을 삭제하시겠습니까? 복구할 수 없습니다.')) return;
     notes = notes.filter(n => n.id !== id);
     localStorage.setItem('zeronoise_notes', JSON.stringify(notes));
+    scheduleCloudStateSync();
     if (currentNoteId === id) {
       currentNoteId = null;
       localStorage.removeItem('zeronoise_current_note_id');
@@ -1842,6 +2237,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   btnLibrary.addEventListener('click', () => {
+    if (!canUsePersonalRecords()) return;
+
     renderLibraryList();
     libraryModal.classList.remove('hidden');
   });
@@ -1853,6 +2250,26 @@ document.addEventListener('DOMContentLoaded', () => {
   libraryModal.addEventListener('click', (e) => {
     if (e.target === libraryModal) {
       libraryModal.classList.add('hidden');
+    }
+  });
+
+  function closeZeroNoiseHelp() {
+    zeroNoiseHelpModal?.classList.add('hidden');
+  }
+
+  btnZeroNoiseHelp?.addEventListener('click', () => {
+    zeroNoiseHelpModal?.classList.remove('hidden');
+  });
+
+  btnZeroNoiseHelpClose?.addEventListener('click', closeZeroNoiseHelp);
+
+  zeroNoiseHelpModal?.addEventListener('click', (e) => {
+    if (e.target === zeroNoiseHelpModal) closeZeroNoiseHelp();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && zeroNoiseHelpModal && !zeroNoiseHelpModal.classList.contains('hidden')) {
+      closeZeroNoiseHelp();
     }
   });
 
@@ -1873,6 +2290,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadStats();
   updateTimerDisplay();
   loadEditorContent();
+  initializeAccountSync();
 
 });
 

@@ -20,8 +20,8 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
   
   <!-- CSS 스타일 시트 연결 -->
-  <link rel="stylesheet" href="style.css?v=20260622g">
-  <link rel="stylesheet" href="mobile.css?v=20260622g">
+  <link rel="stylesheet" href="style.css?v=20260629a">
+  <link rel="stylesheet" href="mobile.css?v=20260629a">
 
   <!-- PWA Manifest 연결 -->
   <link rel="manifest" href="manifest.json">
@@ -46,13 +46,26 @@
         <h1>ZeroNoise</h1>
       </div>
       <p class="subtitle">소음과 생각을 지우는 몰입의 방</p>
-      <button id="pwa-install-button" class="pwa-install-button" type="button" hidden>
-        <span aria-hidden="true">↓</span>
-        <span>앱 설치</span>
-      </button>
-      <div id="task-banner" class="task-banner" style="display: none;">
-        <span class="task-banner-icon">🎯</span>
-        <span class="task-banner-text" id="task-banner-text">현재 몰입 중</span>
+      <div class="header-status-stack" aria-label="ZeroNoise 상태와 도움말">
+        <div class="header-utility-row">
+          <div id="account-mode-badge" class="account-mode-badge" role="status">
+            <span class="account-mode-dot" aria-hidden="true"></span>
+            <span>
+              <strong id="account-mode-text">게스트 모드</strong>
+              <span id="account-mode-detail">기록 저장 꺼짐</span>
+            </span>
+            <a class="account-mode-link" data-account-link href="https://zeroslate.kr">ZeroSlate에서 열기</a>
+          </div>
+          <button id="zeronoise-help-button" class="zeronoise-help-button" type="button">사용법</button>
+        </div>
+        <button id="pwa-install-button" class="pwa-install-button" type="button" hidden>
+          <span aria-hidden="true">↓</span>
+          <span>앱 설치</span>
+        </button>
+        <div id="task-banner" class="task-banner" style="display: none;">
+          <span class="task-banner-icon">🎯</span>
+          <span class="task-banner-text" id="task-banner-text">현재 몰입 중</span>
+        </div>
       </div>
     </header>
 
@@ -345,6 +358,14 @@
               <button id="btn-clear-editor" class="btn btn-sm btn-danger-outline" aria-label="작성 중인 글 비우기">새 글 쓰기</button>
             </div>
           </div>
+          <div id="editor-account-gate" class="account-gate" hidden>
+            <div>
+              <span class="account-gate-kicker">개인 기록 보호</span>
+              <h3>글쓰기와 보관함은 ZeroSlate 계정에서만 열립니다.</h3>
+              <p>게스트에서는 사운드와 타이머만 사용할 수 있어요. 기록, 성과, 기기 간 동기화는 ZeroSlate Pro Suite에서 이어집니다.</p>
+            </div>
+            <a class="btn btn-primary account-gate-button" data-account-link href="https://zeroslate.kr">ZeroSlate에서 열기</a>
+          </div>
           
           <!-- 몰입형 편집 영역 (contenteditable) -->
           <div class="editor-body">
@@ -384,6 +405,14 @@
           <div class="stats-header">
             <h2 class="card-title">오늘의 몰입 성과</h2>
             <button id="btn-reset-stats" class="btn btn-sm btn-danger-outline">기록 초기화</button>
+          </div>
+          <div id="stats-account-gate" class="account-gate account-gate-compact" hidden>
+            <div>
+              <span class="account-gate-kicker">성과 기록 보호</span>
+              <h3>나의 성과는 ZeroSlate 계정으로 관리합니다.</h3>
+              <p>게스트 사용 기록은 저장하지 않습니다. ZeroSlate Pro Suite에서 열면 성과와 노트가 계정에 동기화됩니다.</p>
+            </div>
+            <a class="btn btn-primary account-gate-button" data-account-link href="https://zeroslate.kr">ZeroSlate에서 열기</a>
           </div>
           <div class="stats-grid">
             <div class="stat-item">
@@ -457,6 +486,36 @@
     </section>
   </div>
 
+    <!-- 사용법 모달 -->
+    <div id="zeronoise-help-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="zeronoise-help-title">
+      <div class="modal-content glass-card zeronoise-help-modal">
+        <div class="modal-header">
+          <h2 id="zeronoise-help-title">ZeroNoise 사용법</h2>
+          <button id="zeronoise-help-close" class="btn-close" aria-label="사용법 닫기">&times;</button>
+        </div>
+        <div class="modal-body zeronoise-help-body">
+          <ol class="help-steps">
+            <li>
+              <strong>몰입 시간 설정</strong>
+              <span>집중/휴식 시간을 정하고 시작을 누르면 사운드와 타이머가 함께 움직입니다.</span>
+            </li>
+            <li>
+              <strong>사운드 믹스 선택</strong>
+              <span>프리셋, 백색소음, 자연의 소리를 조합해 지금 작업에 맞는 배경음을 만드세요.</span>
+            </li>
+            <li>
+              <strong>글쓰기 기록</strong>
+              <span>ZeroSlate Suite에서 열면 젠 라이터, 보관함, 성과 기록을 계정과 동기화할 수 있습니다.</span>
+            </li>
+            <li>
+              <strong>ZeroSlate로 돌아가기</strong>
+              <span>몰입을 마치면 상단의 ZeroSlate 버튼으로 돌아가 오늘 타임라인에 흐름을 이어가세요.</span>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
     <!-- 보관함 모달 -->
     <div id="library-modal" class="modal-overlay hidden">
       <div class="modal-content glass-card">
@@ -489,7 +548,7 @@
 
   <!-- html2canvas 라이브러리 (이미지 저장용) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  <script src="app.js?v=20260622g"></script>
-  <script src="mobile-app.js?v=20260622g"></script>
+  <script src="app.js?v=20260629a"></script>
+  <script src="mobile-app.js?v=20260629a"></script>
 </body>
 </html>

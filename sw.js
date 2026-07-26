@@ -1,14 +1,14 @@
-const CACHE_VERSION = 'zeronoise-v15';
+const CACHE_VERSION = 'zeronoise-v19';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const AUDIO_CACHE = `${CACHE_VERSION}-audio`;
 
 const SHELL_ASSETS = [
   './',
   './index.html',
-  './app.js?v=20260622g',
-  './mobile-app.js?v=20260622g',
-  './style.css?v=20260622g',
-  './mobile.css?v=20260622g',
+  './app.js?v=20260629a',
+  './mobile-app.js?v=20260629a',
+  './style.css?v=20260629a',
+  './mobile.css?v=20260629a',
   './manifest.json',
   './logo.png',
   './favicon.png',

@@ -1,5 +1,7 @@
 (() => {
-  const mobileQuery = window.matchMedia('(max-width: 900px)');
+  const mobileQuery = window.matchMedia('(max-width: 1100px)');
+  const phoneQuery = window.matchMedia('(max-width: 767px)');
+  const tabletQuery = window.matchMedia('(min-width: 768px) and (max-width: 1100px)');
   const standaloneQuery = window.matchMedia('(display-mode: standalone)');
   const validViews = new Set(['focus', 'sound', 'write', 'stats']);
   const installButton = document.getElementById('pwa-install-button');
@@ -10,6 +12,38 @@
   const mobileNavItems = Array.from(document.querySelectorAll('[data-mobile-view]'));
   const isIos = /iphone|ipad|ipod/i.test(window.navigator.userAgent);
   let deferredInstallPrompt = null;
+
+  function isPhoneLayout() {
+    return phoneQuery.matches;
+  }
+
+  function syncViewportHeight() {
+    const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight);
+    document.documentElement.style.setProperty('--zn-viewport-height', `${viewportHeight}px`);
+  }
+
+  function syncMobileLayout() {
+    const layout = tabletQuery.matches ? 'tablet' : mobileQuery.matches ? 'phone' : 'desktop';
+    document.body.dataset.mobileLayout = layout;
+
+    if (layout !== 'phone') {
+      document.body.classList.remove('editor-keyboard-active');
+    }
+  }
+
+  function updateKeyboardState(force) {
+    const isEditing = zenEditor && document.activeElement === zenEditor;
+    const keyboardOpen = isPhoneLayout()
+      && isEditing
+      && (window.visualViewport?.height || window.innerHeight) < window.innerHeight * 0.84;
+    const shouldActivate = force === true ? isPhoneLayout() : force === false ? false : keyboardOpen;
+
+    document.body.classList.toggle('editor-keyboard-active', shouldActivate);
+
+    if (shouldActivate) {
+      setMobileView('write', { persist: false, scroll: false });
+    }
+  }
 
   function isStandalone() {
     return standaloneQuery.matches || window.navigator.standalone === true;
@@ -38,6 +72,9 @@
     if (!validViews.has(view)) return;
 
     document.body.dataset.mobileView = view;
+    if (view !== 'write') {
+      document.body.classList.remove('editor-keyboard-active');
+    }
     mobileNavItems.forEach((item) => {
       const isActive = item.dataset.mobileView === view;
       item.classList.toggle('active', isActive);
@@ -150,22 +187,37 @@
 
   document.addEventListener('focusin', (event) => {
     if (event.target === zenEditor) {
-      document.body.classList.add('editor-keyboard-active');
+      syncViewportHeight();
+      updateKeyboardState(true);
     }
   });
   document.addEventListener('focusout', (event) => {
     if (event.target === zenEditor) {
-      document.body.classList.remove('editor-keyboard-active');
+      syncViewportHeight();
+      updateKeyboardState(false);
     }
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !installGuide.hidden) closeInstallGuide();
   });
 
+  window.visualViewport?.addEventListener('resize', () => {
+    syncViewportHeight();
+    updateKeyboardState();
+  });
   window.addEventListener('online', updateOnlineState);
   window.addEventListener('offline', updateOnlineState);
+  window.addEventListener('resize', () => {
+    syncViewportHeight();
+    syncMobileLayout();
+    updateKeyboardState();
+  });
   standaloneQuery.addEventListener?.('change', syncStandaloneState);
+  phoneQuery.addEventListener?.('change', syncMobileLayout);
+  tabletQuery.addEventListener?.('change', syncMobileLayout);
 
+  syncViewportHeight();
+  syncMobileLayout();
   setMobileView(readSavedView(), { persist: false, scroll: false });
   syncStandaloneState();
   updateInstallButton();
