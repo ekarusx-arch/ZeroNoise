@@ -18,6 +18,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const returnUrl = normalizeSuiteReturnUrl(urlParams.get('returnUrl') || urlParams.get('return'));
   const ZEROSLATE_API_ORIGIN = 'https://zeroslate.kr';
   const SUITE_EXCHANGE_API_URL = 'https://zeroslate.kr/api/auth/suite/exchange';
+  const SUPABASE_URL = 'https://ezrfrrxopqnacyhzjkmn.supabase.co';
+  const SUPABASE_ANON_KEY = 'sb_publishable_emOe-ZMMW8DkmbF8wIlAEQ_Lkuia75g';
   const FOCUS_QUEUE_KEY = 'zeronoise_pending_focus_sessions';
   const suiteStartedAt = new Date().toISOString();
   let suiteClientEventId = createSuiteClientEventId();
@@ -27,6 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let accountSyncReady = false;
   let isHydratingAccountState = false;
   let suiteAccessToken = null;
+  const suiteSupabase = createSuiteSupabaseClient();
   let suiteExchangePromise = null;
 
   function normalizeSuiteReturnUrl(rawUrl) {
@@ -117,15 +120,35 @@ document.addEventListener('DOMContentLoaded', () => {
     return nextHeaders;
   }
 
-  async function exchangeSuiteCodeForAccessToken() {
+  function createSuiteSupabaseClient() {
+    const createClient = window.supabase?.createClient;
+    if (typeof createClient !== 'function') return null;
+    return createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  }
+
+  async function refreshSuiteAccessTokenFromSession() {
+    if (!suiteSupabase) return false;
+
+    const { data, error } = await suiteSupabase.auth.getSession();
+    if (error) throw error;
+
+    suiteAccessToken = data?.session?.access_token || null;
+    return Boolean(suiteAccessToken);
+  }
+
+  async function exchangeSuiteCodeForSession() {
     if (!suiteCode) return false;
-    if (suiteAccessToken) return true;
     if (suiteExchangePromise) return suiteExchangePromise;
 
     suiteExchangePromise = (async () => {
       removeSuiteCodeFromUrl();
 
       try {
+        if (!suiteSupabase) {
+          console.warn('ZeroSlate suite login unavailable: Supabase client missing.');
+          return false;
+        }
+
         const response = await fetch(SUITE_EXCHANGE_API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -133,17 +156,23 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         const data = await response.json().catch(() => ({}));
 
-        if (!response.ok || typeof data.access_token !== 'string' || !data.access_token) {
+        if (!response.ok || typeof data.token_hash !== 'string' || !data.token_hash || typeof data.type !== 'string' || !data.type) {
           console.warn('ZeroSlate suite code exchange failed:', data.error || response.status);
-          suiteAccessToken = null;
           return false;
         }
 
-        suiteAccessToken = data.access_token;
-        return true;
+        const { error } = await suiteSupabase.auth.verifyOtp({
+          token_hash: data.token_hash,
+          type: data.type,
+        });
+        if (error) {
+          console.warn('ZeroSlate suite otp verification failed:', error);
+          return false;
+        }
+
+        return refreshSuiteAccessTokenFromSession();
       } catch (error) {
         console.warn('ZeroSlate suite code exchange error:', error);
-        suiteAccessToken = null;
         return false;
       }
     })();
@@ -453,7 +482,10 @@ document.addEventListener('DOMContentLoaded', () => {
     syncAccountModeUI();
 
     try {
-      await exchangeSuiteCodeForAccessToken();
+      await refreshSuiteAccessTokenFromSession().catch((error) => {
+        console.warn('ZeroSlate existing session lookup failed:', error);
+      });
+      await exchangeSuiteCodeForSession();
 
       const response = await fetch(getNoiseStateApiUrl(), {
         method: 'GET',

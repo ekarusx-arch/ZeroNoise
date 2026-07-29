@@ -35,7 +35,9 @@ function createEnvironment(options = {}) {
     fetchImpl = async () => {
       throw new Error('Unexpected fetch');
     },
-    includeMobile = false
+    includeMobile = false,
+    supabaseSession = null,
+    verifyOtpImpl = async () => ({ error: null }),
   } = options;
   const dom = new JSDOM(html, {
     runScripts: 'outside-only',
@@ -47,6 +49,7 @@ function createEnvironment(options = {}) {
   const fetchCalls = [];
   const workerInstances = [];
   const domContentLoadedListeners = [];
+  const verifyOtpCalls = [];
   const originalDocumentAddEventListener = window.document.addEventListener.bind(window.document);
 
   window.addEventListener('error', (event) => runtimeErrors.push(event.error || event.message));
@@ -183,6 +186,26 @@ function createEnvironment(options = {}) {
     fetchCalls.push({ input, init });
     return fetchImpl(input, init, window);
   };
+  window.supabase = {
+    createClient() {
+      let session = supabaseSession;
+      return {
+        auth: {
+          async getSession() {
+            return { data: { session }, error: null };
+          },
+          async verifyOtp(payload) {
+            verifyOtpCalls.push(payload);
+            const result = await verifyOtpImpl(payload, window);
+            if (!result?.error && result?.session !== undefined) {
+              session = result.session;
+            }
+            return result;
+          },
+        },
+      };
+    },
+  };
 
   window.eval(appSource);
   if (includeMobile) {
@@ -193,7 +216,7 @@ function createEnvironment(options = {}) {
   });
   window.document.addEventListener = originalDocumentAddEventListener;
 
-  return { dom, window, runtimeErrors, audioEvents, fetchCalls, workerInstances };
+  return { dom, window, runtimeErrors, audioEvents, fetchCalls, workerInstances, verifyOtpCalls };
 }
 
 async function testMobilePwaSmoke() {
@@ -257,10 +280,18 @@ async function testMobilePwaSmoke() {
 async function testSuiteCodeExchangeAndBearerAuth() {
   const env = createEnvironment({
     url: 'https://noise.zeroslate.kr/?suiteCode=abc123&from=zeroslate&returnUrl=http%3A%2F%2Flocalhost%3A3000%2Fapp&minutes=5',
+    verifyOtpImpl: async () => ({
+      error: null,
+      session: { access_token: 'suite-session-token' },
+    }),
     fetchImpl: async (input, init) => {
       const url = String(input);
       if (url === 'https://zeroslate.kr/api/auth/suite/exchange') {
-        return jsonResponse(200, { access_token: 'suite-token' });
+        return jsonResponse(200, {
+          token_hash: 'otp-hash',
+          type: 'magiclink',
+          user: { email: 'suite@zeroslate.kr' },
+        });
       }
       if (url.includes('/api/zeronoise/state')) {
         if (init.method === 'GET') {
@@ -274,7 +305,13 @@ async function testSuiteCodeExchangeAndBearerAuth() {
       throw new Error(`Unexpected fetch for ${input}`);
     }
   });
-  const { window, runtimeErrors, fetchCalls, workerInstances } = env;
+  const {
+    window,
+    runtimeErrors,
+    fetchCalls,
+    workerInstances,
+    verifyOtpCalls,
+  } = env;
 
   await waitForAsyncWork(10);
 
@@ -285,13 +322,17 @@ async function testSuiteCodeExchangeAndBearerAuth() {
   assert.ok(exchangeCall, 'suiteCode exchange request should be sent.');
   assert.equal(exchangeCall.init.method, 'POST');
   assert.deepEqual(JSON.parse(exchangeCall.init.body), { code: 'abc123' });
+  assert.equal(JSON.stringify(verifyOtpCalls), JSON.stringify([{
+    token_hash: 'otp-hash',
+    type: 'magiclink',
+  }]));
 
   const stateCalls = fetchCalls.filter((call) => String(call.input).includes('/api/zeronoise/state'));
   assert.ok(stateCalls.length >= 2, 'state GET and initial state save should both run.');
   stateCalls.forEach((call) => {
     assert.equal(new URL(String(call.input)).origin, 'https://zeroslate.kr');
     assert.equal(call.init.credentials, 'include');
-    assert.equal(call.init.headers.Authorization, 'Bearer suite-token');
+    assert.equal(call.init.headers.Authorization, 'Bearer suite-session-token');
   });
 
   const startButton = window.document.getElementById('btn-timer-start');
@@ -307,20 +348,21 @@ async function testSuiteCodeExchangeAndBearerAuth() {
   assert.ok(focusCall, 'focus session should be sent after timer completion.');
   assert.equal(new URL(String(focusCall.input)).origin, 'https://zeroslate.kr');
   assert.equal(focusCall.init.credentials, 'include');
-  assert.equal(focusCall.init.headers.Authorization, 'Bearer suite-token');
+  assert.equal(focusCall.init.headers.Authorization, 'Bearer suite-session-token');
 
   window.close();
 }
 
-async function testSuiteCodeExchangeFailureFallsBack() {
+async function testSuiteCodeExchangeFailureKeepsExistingSession() {
   const env = createEnvironment({
     url: 'https://noise.zeroslate.kr/?suiteCode=bad-code&from=zeroslate&returnUrl=https%3A%2F%2Fzeroslate.kr%2Fapp',
+    supabaseSession: { access_token: 'existing-session-token' },
     fetchImpl: async (input) => {
       if (String(input) === 'https://zeroslate.kr/api/auth/suite/exchange') {
         return jsonResponse(401, { error: 'invalid_code' });
       }
       if (String(input).includes('/api/zeronoise/state')) {
-        return jsonResponse(401, { error: 'unauthorized' });
+        return jsonResponse(200, { ok: true, user: { email: 'existing@zeroslate.kr' } });
       }
       throw new Error(`Unexpected fetch: ${input}`);
     }
@@ -331,12 +373,13 @@ async function testSuiteCodeExchangeFailureFallsBack() {
 
   assert.equal(runtimeErrors.length, 0, `Runtime errors: ${runtimeErrors.join(', ')}`);
   assert.equal(window.location.search.includes('suiteCode='), false, 'suiteCode should be removed even after failure.');
-  assert.equal(window.document.getElementById('account-mode-text').textContent, '로그인 필요');
-  assert.equal(window.document.body.classList.contains('guest-mode'), true);
+  assert.equal(window.document.getElementById('account-mode-text').textContent, 'existing');
+  assert.equal(window.document.getElementById('account-mode-detail').textContent, '동기화 켜짐');
+  assert.equal(window.document.body.classList.contains('guest-mode'), false);
 
   const stateCall = fetchCalls.find((call) => String(call.input).includes('/api/zeronoise/state'));
   assert.ok(stateCall, 'fallback state check should still run.');
-  assert.equal(stateCall.init.headers.Authorization, undefined);
+  assert.equal(stateCall.init.headers.Authorization, 'Bearer existing-session-token');
   assert.equal(stateCall.init.credentials, 'include');
 
   window.close();
@@ -345,7 +388,7 @@ async function testSuiteCodeExchangeFailureFallsBack() {
 async function main() {
   await testMobilePwaSmoke();
   await testSuiteCodeExchangeAndBearerAuth();
-  await testSuiteCodeExchangeFailureFallsBack();
+  await testSuiteCodeExchangeFailureKeepsExistingSession();
 
   assert.match(html, /viewport-fit=cover/);
   assert.match(html, /id="mobile-app-nav"/);
